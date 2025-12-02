@@ -1,0 +1,6 @@
+/db/birthdays.sqlite3-wal
+/db/birthdays.sqlite3-shm
+/db/birthdays.sqlite3
+.venv
+.idea
+/identifier.sqlite
