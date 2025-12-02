@@ -13,7 +13,7 @@ class Settings:
 def load_settings() -> Settings:
     token = os.getenv("REMIND_BOT_TOKEN", "")
     if not token:
-        # Пользователь должен выставить переменную окружения BOT_TOKEN
+        # Пользователь должен выставить переменную окружения REMIND_BOT_TOKEN
         pass
     db_path = os.getenv("DB_PATH", "db/birthdays.sqlite3")
     # Частота напоминаний, мин. — по умолчанию 60

@@ -6,6 +6,7 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiogram import __version__ as aiogram_version
 
 from config import load_settings
 from db.db import init_database, get_db
@@ -19,7 +20,8 @@ async def main():
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
     if not settings.bot_token:
-        print("[WARN] BOT_TOKEN не задан. Установите переменную окружения BOT_TOKEN перед запуском.")
+        logging.error("REMIND_BOT_TOKEN не задан. Установите переменную окружения REMIND_BOT_TOKEN и перезапустите.")
+        return
 
     # DB
     db = init_database(settings.db_path)
@@ -28,6 +30,14 @@ async def main():
     # Bot & Dispatcher
     bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
+
+    # Health: getMe to validate token and log basic info
+    try:
+        me = await bot.get_me()
+        logging.info(f"Bot OK: @{me.username} id={me.id}, aiogram={aiogram_version}")
+    except Exception:
+        logging.exception("Bot token check failed (getMe). Проверьте REMIND_BOT_TOKEN.")
+        return
 
     # Routers
     dp.include_router(start.router)
@@ -48,8 +58,14 @@ async def main():
     )
     rem_handlers.bind_reminder_service(reminder_service)
     reminder_service.start()
+    logging.info(
+        "Scheduler started: tz=%s, interval=%s min, jobs=%s",
+        settings.timezone,
+        settings.reminder_interval_minutes,
+        len(scheduler.get_jobs()),
+    )
 
-    print("Бот запущен. Нажмите Ctrl+C для остановки.")
+    logging.info("Бот запущен. Нажмите Ctrl+C для остановки.")
     await dp.start_polling(bot)
 
 
