@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -8,6 +9,7 @@ class Settings:
     db_path: str = "db/birthdays.sqlite3"
     timezone: str = os.getenv("TZ", "UTC")
     reminder_interval_minutes: int = 2
+    admin_uid: Optional[int] = None
 
 
 def load_settings() -> Settings:
@@ -25,4 +27,17 @@ def load_settings() -> Settings:
     # Безопасный минимум 5 минут
     if interval < 5:
         interval = 5
-    return Settings(bot_token=token, db_path=db_path, reminder_interval_minutes=interval)
+    # Admin UID (optional)
+    admin_s = os.getenv("ADMIN_UID", "").strip()
+    admin_uid: Optional[int]
+    try:
+        admin_uid = int(admin_s) if admin_s else None
+    except ValueError:
+        admin_uid = None
+
+    return Settings(
+        bot_token=token,
+        db_path=db_path,
+        reminder_interval_minutes=interval,
+        admin_uid=admin_uid,
+    )

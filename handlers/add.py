@@ -66,6 +66,6 @@ async def add_phone(message: Message, state: FSMContext):
     from services.utils import human_date_short
     await message.answer(
         f"Добавлено: {data['friend']} — {human_date_short(data['date'])}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(message.from_user.id),
     )
     await message.answer("Хотите добавить ещё? Нажмите ‘Добавить день рождения’.")

@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from db.db import Database
-from services.utils import get_age_text, human_date_short, today_mm_dd, today_str
+from services.utils import get_age_text, human_date_short, today_str
 
 
 def reminder_keyboard(birthday_id: int, with_link: bool = False) -> InlineKeyboardMarkup:
@@ -36,18 +36,35 @@ class ReminderService:
     interval_minutes: int = 60
 
     def start(self):
-        # Periodic reminders with configurable interval
-        # Первый запуск сразу после старта (next_run_time=now)
-        try:
-            now = dt.datetime.now(self.scheduler.timezone)
-        except Exception:
-            now = dt.datetime.now()
-        self.scheduler.add_job(
-            self._tick_job,
-            "interval",
-            minutes=self.interval_minutes,
-            next_run_time=now,
-        )
+        # Periodic reminders aligned to wall clock boundaries.
+        # If interval divides 60, use cron (*/N) to align to :00, :N, ...
+        if self.interval_minutes >= 1 and 60 % self.interval_minutes == 0:
+            step = self.interval_minutes
+            if step == 60:
+                trig = CronTrigger(minute=0)
+            else:
+                # APScheduler supports step notation
+                trig = CronTrigger(minute=f"*/{step}")
+            self.scheduler.add_job(self._tick_job, trig)
+        else:
+            # Fallback: interval trigger, align next run to the next boundary
+            try:
+                tznow = dt.datetime.now(self.scheduler.timezone)
+            except Exception:
+                tznow = dt.datetime.now()
+            minute = tznow.minute
+            step = max(1, self.interval_minutes)
+            next_minute = ((minute // step) + 1) * step
+            delta_min = next_minute - minute
+            if delta_min <= 0:
+                delta_min += step
+            next_run = tznow.replace(second=0, microsecond=0) + dt.timedelta(minutes=delta_min)
+            self.scheduler.add_job(
+                self._tick_job,
+                "interval",
+                minutes=self.interval_minutes,
+                next_run_time=next_run,
+            )
         # Daily reset at 00:05
         self.scheduler.add_job(self._daily_reset, CronTrigger(hour=0, minute=5))
         self.scheduler.start()
@@ -56,18 +73,86 @@ class ReminderService:
         await self.db.reset_daily_flags()
 
     async def _tick_job(self):
-        mm, dd = today_mm_dd()
-        rows = await self.db.select_today_not_notified(mm, dd)
-        logging.info(f"Reminder tick: found {len(rows)} birthday(s) for {mm}-{dd}")
-        # Send reminders for each birthday
-        for row in rows:
-            uid = int(row["uid"])
-            bid = int(row["id"]) 
+        await self.run_tick()
+
+    async def run_tick(self, only_uid: int | None = None):
+        # Подробное логирование «тика»: общее число ДР на сегодня, и по каждому пользователю
+        try:
+            now_utc = dt.datetime.utcnow()
+        except Exception:
+            now_utc = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+
+        # Время «тика» в TZ планировщика
+        try:
+            tznow = dt.datetime.now(self.scheduler.timezone)
+        except Exception:
+            tznow = dt.datetime.now()
+        tick_str = tznow.strftime("%H:%M")
+
+        # Используем календарную дату по UTC для общего счёта, как и прежде
+        mm_total = f"{now_utc.month:02d}"
+        dd_total = f"{now_utc.day:02d}"
+        try:
+            all_today = await self.db.select_today_all(mm_total, dd_total)
+            logging.info(f"В тик {tick_str} получено {len(all_today)} дня рождения")
+        except Exception:
+            logging.info(f"В тик {tick_str} получено неизвестно сколько дней рождений (ошибка выборки)")
+
+        uids = await self.db.list_uids_with_birthdays()
+        if only_uid is not None:
+            uids = [uid for uid in uids if uid == only_uid]
+
+        for uid in uids:
+            # Персональные настройки
             try:
-                await self._send_or_replace_notification(uid, row)
+                prefs = await self.db.get_user_prefs(uid)
+                tz_offset = int(prefs["tz_offset"]) if prefs else 0
+                start_hour = int(prefs["start_hour"]) if prefs else 0
             except Exception:
-                # Ignore errors per-user to not block others
+                tz_offset, start_hour = 0, 0
+
+            local_now = now_utc + dt.timedelta(hours=tz_offset)
+            mm = f"{local_now.month:02d}"
+            dd = f"{local_now.day:02d}"
+
+            # Все сегодняшние ДР пользователя и те, которые ещё не напоминались
+            try:
+                rows_all = await self.db.select_user_today_all(uid, mm, dd)
+            except Exception:
+                rows_all = []
+            try:
+                rows_todo = await self.db.select_user_today_not_notified(uid, mm, dd)
+            except Exception:
+                rows_todo = []
+
+            # Окно отправки: [start_hour, 23]
+            if not (start_hour <= local_now.hour <= 23):
+                sign = "+" if tz_offset >= 0 else ""
+                logging.info(
+                    f"пользователю {uid} отправлены 0 уведомлений. причина время не пришло, старт уведомлений с {start_hour:02d}:00 (UTC {sign}{tz_offset})"
+                )
                 continue
+
+            sent = 0
+            errors = 0
+            for row in rows_todo:
+                try:
+                    await self._send_or_replace_notification(uid, row)
+                    sent += 1
+                except Exception as e:
+                    errors += 1
+                    logging.exception(f"Ошибка отправки уведомления пользователю {uid} по записи id={int(row['id'])}: {e}")
+
+            already = max(0, len(rows_all) - len(rows_todo))
+            # Сформируем текст по аналогии с примерами
+            base = f"пользователю {uid} отправлены {sent} уведомления с напоминанием"
+            tails: list[str] = []
+            if already:
+                tails.append(f"{already} не отправлено, причина уже поздравил")
+            if errors:
+                tails.append(f"{errors} не отправлено, причина ошибка отправки")
+            msg = base + (", " + ", ".join(tails) if tails else "")
+            logging.info(msg)
 
     async def _send_or_replace_notification(self, uid: int, row):
         bid = int(row["id"]) 

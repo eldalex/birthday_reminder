@@ -34,6 +34,14 @@ class Database:
                 cols2 = {row[1] for row in cur2.fetchall()}
                 if "extra_message_id" not in cols2:
                     self._conn.execute("ALTER TABLE last_notifications ADD COLUMN extra_message_id INTEGER NULL")
+                # ensure user_prefs table exists
+                self._conn.execute(
+                    "CREATE TABLE IF NOT EXISTS user_prefs ("
+                    " uid INTEGER PRIMARY KEY,"
+                    " tz_offset INTEGER NOT NULL DEFAULT 0,"
+                    " start_hour INTEGER NOT NULL DEFAULT 0"
+                    ")"
+                )
 
         await asyncio.to_thread(run)
 
@@ -124,6 +132,27 @@ class Database:
             (like,),
         )
 
+    async def select_today_all(self, mm: str, dd: str) -> list[sqlite3.Row]:
+        like = f"%-{mm}-{dd}"
+        return await self.fetchall(
+            "SELECT * FROM birthdays WHERE date LIKE ?",
+            (like,),
+        )
+
+    async def select_user_today_not_notified(self, uid: int, mm: str, dd: str) -> list[sqlite3.Row]:
+        like = f"%-{mm}-{dd}"
+        return await self.fetchall(
+            "SELECT * FROM birthdays WHERE uid = ? AND date LIKE ? AND already_remaind = 0",
+            (uid, like),
+        )
+
+    async def select_user_today_all(self, uid: int, mm: str, dd: str) -> list[sqlite3.Row]:
+        like = f"%-{mm}-{dd}"
+        return await self.fetchall(
+            "SELECT * FROM birthdays WHERE uid = ? AND date LIKE ?",
+            (uid, like),
+        )
+
     async def mark_notified_today(self, uid: int, bid: int) -> None:
         await self.execute("UPDATE birthdays SET already_remaind = 1 WHERE id = ? AND uid = ?", (bid, uid))
 
@@ -148,6 +177,34 @@ class Database:
 
     async def reset_daily_flags(self) -> None:
         await self.execute("UPDATE birthdays SET already_remaind = 0")
+
+    # user preferences
+    async def get_user_prefs(self, uid: int) -> Optional[sqlite3.Row]:
+        return await self.fetchone("SELECT * FROM user_prefs WHERE uid = ?", (uid,))
+
+    async def upsert_user_prefs(self, uid: int, tz_offset: int, start_hour: int) -> None:
+        await self.execute(
+            "INSERT INTO user_prefs(uid, tz_offset, start_hour) VALUES(?, ?, ?) "
+            "ON CONFLICT(uid) DO UPDATE SET tz_offset = excluded.tz_offset, start_hour = excluded.start_hour",
+            (uid, tz_offset, start_hour),
+        )
+
+    async def list_uids_with_birthdays(self) -> list[int]:
+        rows = await self.fetchall("SELECT DISTINCT uid FROM birthdays")
+        return [int(r["uid"]) for r in rows]
+
+    async def count_unique_users(self) -> int:
+        row = await self.fetchone("SELECT COUNT(DISTINCT uid) AS c FROM birthdays")
+        return int(row["c"]) if row else 0
+
+    async def count_total_records(self) -> int:
+        row = await self.fetchone("SELECT COUNT(*) AS c FROM birthdays")
+        return int(row["c"]) if row else 0
+
+    async def list_user_record_counts(self) -> list[sqlite3.Row]:
+        return await self.fetchall(
+            "SELECT uid, COUNT(*) AS c FROM birthdays GROUP BY uid ORDER BY uid"
+        )
 
 
 _db: Database | None = None

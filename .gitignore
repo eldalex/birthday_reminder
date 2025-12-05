@@ -4,3 +4,4 @@
 .venv
 .idea
 /identifier.sqlite
+/reminder.log

@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
@@ -13,11 +15,21 @@ from db.db import init_database, get_db
 from handlers import start, add, list as list_handler, edit, reminders as rem_handlers
 from handlers import bulk
 from handlers import link
+from handlers import settings as settings_handler
+from handlers import admin as admin_handler
 from services.reminder_service import ReminderService
 
 
 async def main():
-    logging.basicConfig(level=logging.INFO)
+    # Logging: console + file next to main.py
+    log_path = Path(__file__).with_name("reminder.log")
+    handlers = [logging.StreamHandler()]
+    try:
+        file_handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        handlers.append(file_handler)
+    except Exception:
+        pass
+    logging.basicConfig(level=logging.INFO, handlers=handlers, format="%(asctime)s %(levelname)s %(message)s")
     settings = load_settings()
     if not settings.bot_token:
         logging.error("REMIND_BOT_TOKEN не задан. Установите переменную окружения REMIND_BOT_TOKEN и перезапустите.")
@@ -39,6 +51,13 @@ async def main():
         logging.exception("Bot token check failed (getMe). Проверьте REMIND_BOT_TOKEN.")
         return
 
+    # Bind admin UID to handlers (if provided)
+    try:
+        start.set_admin_uid(settings.admin_uid)
+        admin_handler.set_admin_uid(settings.admin_uid)
+    except Exception:
+        pass
+
     # Routers
     dp.include_router(start.router)
     dp.include_router(add.router)
@@ -46,7 +65,9 @@ async def main():
     dp.include_router(edit.router)
     dp.include_router(bulk.router)
     dp.include_router(link.router)
+    dp.include_router(settings_handler.router)
     dp.include_router(rem_handlers.router)
+    dp.include_router(admin_handler.router)
 
     # Scheduler & ReminderService
     scheduler = AsyncIOScheduler(timezone=settings.timezone)

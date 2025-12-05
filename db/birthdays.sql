@@ -23,3 +23,10 @@ CREATE TABLE IF NOT EXISTS last_notifications (
     extra_message_id INTEGER NULL,
     PRIMARY KEY (uid, birthday_id)
 );
+
+-- Per-user preferences: timezone offset (hours) and start hour for notifications
+CREATE TABLE IF NOT EXISTS user_prefs (
+    uid INTEGER PRIMARY KEY,
+    tz_offset INTEGER NOT NULL DEFAULT 0,   -- e.g., +3, -1
+    start_hour INTEGER NOT NULL DEFAULT 0   -- 0..23; send from this hour until 23:00 local
+);
